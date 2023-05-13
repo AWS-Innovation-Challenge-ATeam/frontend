@@ -1,20 +1,21 @@
-import React, { useState } from 'react';
-import './App.css';
-import { RekognitionClient, RecognizeCelebritiesCommand } from '@aws-sdk/client-rekognition';
-import { Configuration, OpenAIApi } from 'openai';
+import React, { useState, useRef, useEffect } from "react";
+import "./App.css";
+import {
+  RekognitionClient,
+  RecognizeCelebritiesCommand,
+} from "@aws-sdk/client-rekognition";
+import { Configuration, OpenAIApi } from "openai";
 
-// Replace with your actual AWS credentials
-const accessKeyId = '';
+const accessKeyId = "";
 const secretAccessKey = "";
-const region = 'us-west-1';
+const region = "us-west-1";
 
 const openaiConfiguration = new Configuration({
-  apiKey: '',
+  apiKey: "sk-",
 });
 
 const openai = new OpenAIApi(openaiConfiguration);
 
-// Configure AWS Rekognition client
 const rekognitionClient = new RekognitionClient({
   credentials: {
     accessKeyId,
@@ -22,26 +23,72 @@ const rekognitionClient = new RekognitionClient({
   },
   region,
 });
+let jack = "lastCelebrity";
+
+// Create the cache object
+let celebrityCache = {};
 
 function App() {
-  const [file, setFile] = useState(null);
   const [loading, setLoading] = useState(false);
   const [celebrityInfo, setCelebrityInfo] = useState(null);
   const [generatedInfo, setGeneratedInfo] = useState(null);
-  const [imageURL, setImageURL] = useState(null); // Add this new state variable
+  const [lastCelebrity, setLastCelebrity] = useState(null);
+  const [celebrityTimeout, setCelebrityTimeout] = useState(null);
 
-  const handleImageUpload = (e) => {
-    setFile(e.target.files[0]);
+  const videoRef = useRef(null);
+  const canvasRef = useRef(null);
+  const capturingRef = useRef(false);
+
+  useEffect(() => {
+    startWebcam();
+    continuousCapture();
+    if (celebrityInfo) {
+      handleGetInfo(celebrityInfo);
+    }
+  }, [celebrityInfo]);
+
+  const startWebcam = async () => {
+    try {
+      const videoStream = await navigator.mediaDevices.getUserMedia({
+        video: true,
+      });
+      videoRef.current.srcObject = videoStream;
+    } catch (err) {
+      console.error("Error starting the webcam:", err);
+    }
   };
 
-  const recognizeCelebrities = async () => {
-    if (!file) return;
+  const captureSnapshot = () => {
+    return new Promise((resolve, reject) => {
+      const canvas = canvasRef.current;
+      const video = videoRef.current;
 
-    const arrayBuffer = await file.arrayBuffer();
+      canvas.width = video.videoWidth;
+      canvas.height = video.videoHeight;
+      canvas.className = "hidden";
+      const ctx = canvas.getContext("2d");
+      ctx.drawImage(video, 0, 0, video.videoWidth, video.videoHeight);
+
+      canvas.toBlob((blob) => {
+        resolve(blob);
+      });
+    });
+  };
+
+  const continuousCapture = async () => {
+    capturingRef.current = true;
+    while (capturingRef.current) {
+      const blob = await captureSnapshot();
+      console.log("calling recognizeCelebrities")
+      await recognizeCelebrities(blob);
+      await new Promise((resolve) => setTimeout(resolve, 500));
+    }
+  };
+
+  const recognizeCelebrities = async (blob) => {
+    if (!blob) return;
+    const arrayBuffer = await blob.arrayBuffer();
     const buffer = new Uint8Array(arrayBuffer);
-
-    // Add this line to set the image URL
-    setImageURL(URL.createObjectURL(file));
 
     const params = {
       Image: {
@@ -50,85 +97,110 @@ function App() {
     };
 
     try {
-      console.log("recoginizing celebrities")
       const command = new RecognizeCelebritiesCommand(params);
       const data = await rekognitionClient.send(command);
-      setCelebrityInfo(JSON.stringify(data, null, 2));
+      const celebrity = data.CelebrityFaces[0];
+      if (celebrity && celebrity.MatchConfidence > 95) {
+        if (celebrity.Name !== jack) {
+          setLastCelebrity(celebrity.Name);
+          jack = celebrity.Name;
+          const currentCelebrityInfo = JSON.stringify(data, null, 2);
+          setCelebrityInfo(currentCelebrityInfo);
+          setGeneratedInfo(null);
+          console.log("New celebrity, calling handleGetInfo immediately");
+        } else {
+          console.log("Celebrity detected, but it's the same as the last one");
+        }
+        return true;
+      } else {
+        // console.log("no celebrity detected");
+      }
     } catch (err) {
       console.error(err);
     }
+    return false;
   };
 
   const fetchGeneratedText = async (prompt) => {
     setLoading(true);
     try {
       const result = await openai.createCompletion({
-        model: 'text-davinci-003',
+        model: "text-davinci-003",
         prompt: prompt,
-        temperature: 0.5,
-        max_tokens: 4000,
+        temperature: 0.1,
+        max_tokens: 400,
       });
       const myString = result.data.choices[0].text.substring(2);
       setGeneratedInfo(myString);
+      // Store the information in the cache
+      celebrityCache[jack] = myString;
     } catch (e) {
       console.error(e);
-      setGeneratedInfo('Something went wrong, please try again.');
+      setGeneratedInfo("Something went wrong, please try again.");
     }
     setLoading(false);
   };
-  
-  
 
-  const handleGetInfo = () => {
-    if (!celebrityInfo) return;
+  const handleGetInfo = (currentCelebrityInfo) => {
+    if (!currentCelebrityInfo) return;
 
-    const celebrity = JSON.parse(celebrityInfo);
+    const celebrity = JSON.parse(currentCelebrityInfo);
     const athleteName = celebrity.CelebrityFaces[0]?.Name;
 
     if (athleteName) {
-      const prompt = `Provide an overview of the fan culture and history surrounding the team/players, including personal anecdotes and lesser-known facts that may intrigue those with prior knowledge of the subject ${athleteName}.`;
-      console.log("this is the prompt " + prompt);
-      fetchGeneratedText(prompt);
+      const prompt = `Can you give me a short, 150 word summary about ${athleteName} in a JSON format, including the following fields: "Name", "Summary", "Interesting". The "Interesting fact" field can be any interesting fact about ${athleteName}, but if it's obscure that would be even better. Make it relatable and heartwarming if possible. interesting facts should be longer. I know a decent bit about basketball, so tell me something that would amuse me.`;
+      console.log("sending prompt to fetchGeneratedText");
+      // Check if the information is already in the cache
+      if (celebrityCache[athleteName]) {
+        setGeneratedInfo(celebrityCache[athleteName]);
+        console.log("Information retrieved from cache");
+      } else {
+        fetchGeneratedText(prompt);
+        console.log(prompt);
+      }
     }
   };
 
   return (
-    <div className="App min-h-screen bg-gray-100">
-      <div className="container mx-auto p-8">
-        <h1 className="text-4xl font-bold mb-8 text-center">Athelte Recognition and Information</h1>
-        <div className="flex flex-col items-center">
-          <input
-            type="file"
-            onChange={handleImageUpload}
-            accept="image/*"
-            className="mb-4 p-2 bg-white border border-gray-300 rounded"
-          />
-          <button
-            onClick={recognizeCelebrities}
-            className="mb-4 bg-blue-500 hover:bg-blue-600 text-white font-semibold py-2 px-4 rounded"
-          >
-            Recognize Celebrities
-          </button>
-          <button
-            onClick={handleGetInfo}
-            disabled={loading}
-            className={`mb-4 ${
-              loading ? 'bg-gray-500' : 'bg-green-500 hover:bg-green-600'
-            } text-white font-semibold py-2 px-4 rounded`}
-          >
-            {loading ? 'Generating...' : 'Get Information'}
-          </button>
-        </div>
-      <div className="container mx-auto mb-4">
-        {imageURL && <img src={imageURL} alt="Recognized Celebrity" className="rounded" />}
-      </div>
-        <div className='container'>
-        {generatedInfo && (
-          <p className="mb-3 text-lg text-gray-500 md:text-xl dark:text-gray-400">
-            {generatedInfo.replace(/\n/g, ' ')}
-            {JSON.stringify(generatedInfo, null, 2)}
-          </p>
-        )}
+    <div className="min-h-screen bg-gradient-to-r from-gray-200 to-white p-6">
+      <div className="mx-auto max-w-7xl">
+        <h1 className="text-4xl font-bold mb-8 text-center">
+          Athlete Recognition and Information
+        </h1>
+        <div className="flex flex-row items-start justify-between">
+          <div className="w-1/2">
+            <video
+              id="webcam"
+              ref={videoRef}
+              className="rounded"
+              autoPlay
+              muted></video>
+            <canvas id="canvas" ref={canvasRef} className="hidden"></canvas>
+          </div>
+          <div className="quiz-container w-1/2 h-64 rounded-lg overflow-auto shadow-lg">
+            {lastCelebrity && (
+              <h2 className="quiz-header text-2xl font-bold mb-4">
+                {" "}
+                Name: {lastCelebrity}
+              </h2>
+            )}
+            {generatedInfo && (
+              <ul className="list-none p-4">
+                <li className="mb-4">
+                  <h3 className="font-bold mb-2">Summary</h3>
+                  <p className="font-normal text-gray-700">
+                    {JSON.parse(generatedInfo).Summary}
+                  </p>
+                </li>
+                <li className="mb-4">
+                  <h3 className="font-bold mb-2">Interesting Fact</h3>
+                  <p className="font-normal text-gray-700">
+                    {JSON.parse(generatedInfo).Interesting}
+                  </p>
+                </li>
+              </ul>
+            )}
+          </div>
         </div>
       </div>
     </div>
