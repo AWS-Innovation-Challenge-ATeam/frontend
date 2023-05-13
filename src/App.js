@@ -81,7 +81,7 @@ function App() {
       const blob = await captureSnapshot();
       console.log("calling recognizeCelebrities")
       await recognizeCelebrities(blob);
-      await new Promise((resolve) => setTimeout(resolve, 5000));
+      await new Promise((resolve) => setTimeout(resolve, 50000000));
     }
   };
 
