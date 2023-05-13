@@ -1,0 +1,11 @@
+@import 'tailwindcss/base';
+@import 'tailwindcss/components';
+@import 'tailwindcss/utilities';
+
+
+.container {
+  margin: 0 auto;
+  max-width: 800px;
+  padding: 50px 20px;
+  text-align: center;
+}
