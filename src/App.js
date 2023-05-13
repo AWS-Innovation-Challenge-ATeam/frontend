@@ -6,12 +6,12 @@ import {
 } from "@aws-sdk/client-rekognition";
 import { Configuration, OpenAIApi } from "openai";
 
-const accessKeyId = "";
-const secretAccessKey = "";
+const accessKeyId = process.env.AWS_ACCESS_KEY_ID;
+const secretAccessKey = process.env.AWS_SECRET_KEY_ID;
 const region = "us-west-1";
 
 const openaiConfiguration = new Configuration({
-  apiKey: "sk-",
+  apiKey: process.env.GPT_API_KEY,
 });
 
 const openai = new OpenAIApi(openaiConfiguration);
@@ -81,7 +81,7 @@ function App() {
       const blob = await captureSnapshot();
       console.log("calling recognizeCelebrities")
       await recognizeCelebrities(blob);
-      await new Promise((resolve) => setTimeout(resolve, 500));
+      await new Promise((resolve) => setTimeout(resolve, 5000));
     }
   };
 
